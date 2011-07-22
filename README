@@ -1,0 +1,20 @@
+id3 tag parser written in objective-c. For use in Cocoa applications
+
+
+Usage is straightforward: send the parser class object a parseTagWithData:error message, passing in data
+that hopefully contains an ID3 tag. The tag has to be well formed, meaning it has to be the whole tag. I 
+suggest also passing in an error object.
+
+The return value is an array of dictionaries, one dictionary per frame. Each dictionary contains a 
+frame ID, description of that frame ID, and the "value" associated with that frame.
+Its up to the user to determine how the frames should be interpreted.
+ 
+In this initial iteration the parser is limited to parsing id3v2.4 tags, and only the text frames (Txyz)
+
+Support for id3v2.3, 2.2 should be coming shortly. As for tags, I'll probably add the URL tags (Wxyz)
+and maybe a couple more, but that'll be it prolly.
+
+
+
+
+

@@ -1,0 +1,270 @@
+//
+//  ID3Parser.m
+//  StreamTest
+//
+//  Created by mac on 7/6/11.
+//  Copyright 2011 __MyCompanyName__. All rights reserved.
+//
+#import "ID3Parser.h"
+#import "ID3Frame.h"
+
+//Boilerplate for ID3 Header
+#ifndef ID3_H
+#define ID3_H
+
+#define ID3_HEADER_VERSION_4 4
+
+#define ID3_HEADER_LENGTH 10
+#define ID3_HEADER_FLAGS_OFFSET 5
+#define ID3_HEADER_VERSION_OFFSET 3
+#define ID3_HEADER_SIZE_OFFSET 6
+
+#define ID3_HEADER_FLAG_UNSYNC 128
+#define ID3_HEADER_FLAG_EXTEND_HDR 64
+#define ID3_HEADER_FLAG_EXPERIMENTAL 32
+
+#endif
+
+//Boilerplate for ID3 FRAME header
+#ifndef ID3_FRAMEHDR
+#define ID3_FRAMEHDR
+
+#define ID3_FRAMEHDR_LENGTH 10
+#define ID3_FRAMEHDR_SIZE_OFFSET 4 //frame size does not include the 10 bytes of frame header
+#define ID3_FRAMEHDR_FLAGS_OFFSET 8
+#define ID3_FRAMEHDR_FLAGS_SIZE 2
+#define ID3_FRAMEHDR_ID_SIZE 4
+
+#endif
+
+
+
+static NSString * const ID3ParserDomain = @"ID3ParserDomain";
+
+//Private Class interface
+@interface ID3Parser ()
+
++ (NSArray *)descriptionsForFramesArray:(NSArray *)tagsArray;
++ (NSError *)errorForCode:(NSInteger)errorCode underlyingError:(NSError *)otherError recoveryObject:(id)recoverObject;
++ (int)integerFromSyncsafeInteger:(int)syncsafeInt;
+
+@end
+/*
+ TODO: Make finding start of tag more robust
+		Adjust code to use NSError objects
+*/
+@implementation ID3Parser
++ (NSArray *)parseTagWithData:(NSData *)data error:(NSError **)error
+{
+	//NSDictionary *tagDictionary = nil;
+	NSUInteger length = [data length];
+	if(length){
+		[data retain]; //CONSIDER consequences of not retaining passed data
+		
+		//NOTE: IF MANIPULATING BYTES, SHOULD PROBABLY COPY THEM!
+		
+		//get pointers to the beginning of frames, and to the end of the ID3 tag
+		/*
+		 TODO MAKE FINDING START OF TAG MORE ROBUST
+		*/
+		NSRange id3Header = [data rangeOfData:[NSData dataWithBytes:"ID3" length:3] options:0 range:NSMakeRange(0, length)]; 
+		if(id3Header.location == NSNotFound){
+			if(error != NULL) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_ENOTFOUND 
+											   underlyingError:nil 
+												recoveryObject:nil];
+			[data release];
+			return nil;
+		}
+		
+		char *id3HeaderBegin = (char*)[data bytes] + id3Header.location;
+		char majorVersion = *(id3HeaderBegin + ID3_HEADER_VERSION_OFFSET);
+		if(majorVersion != ID3_HEADER_VERSION_4){
+			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EVERSION 
+											   underlyingError:nil 
+												recoveryObject:nil];
+			[data release];
+			return nil;
+		}
+		
+		NSLog(@"Major version: %d", majorVersion);
+		
+		//convert sync safe integer into regular integer - ie get rid of the most significant bit in each byte (bits val is zero) 		
+		int syncInt = *(int *)(id3HeaderBegin + ID3_HEADER_SIZE_OFFSET);
+		int tagSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
+		assert(tagSize <= 0xFFFFFFF);
+		NSLog(@"Tag size is: %d", tagSize);
+		
+		//find extended header
+		char flags = *(id3HeaderBegin + ID3_HEADER_FLAGS_OFFSET); //flags is 6th byte from beginning of id3 header
+		int extendedHeaderSize = 0;
+		if((char)ID3_HEADER_FLAG_EXTEND_HDR & flags){//extended header present in mask
+			NSLog(@"Extened header is present in mask\n");
+			syncInt = *(int *)(id3HeaderBegin + ID3_HEADER_LENGTH);
+			extendedHeaderSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
+			assert(extendedHeaderSize <=0xFFFFFFF);
+		}
+		
+		char *framesBegin = (char*)(id3HeaderBegin + ID3_HEADER_LENGTH + extendedHeaderSize);
+		char *headerEnd = id3HeaderBegin + ID3_HEADER_LENGTH + tagSize;
+		
+		//Begin parsing frames
+		NSMutableArray *framesArray = [[NSMutableArray alloc] init];
+		char* framePointer = framesBegin;
+		while(framePointer != headerEnd && *framePointer != 0){
+			NSError *frameError = nil;
+			ID3Frame *frame = [ID3Frame getFrameFromBytes:framePointer error:&frameError];
+			if(frame == nil){//Error parsing frame
+				
+				NSLog(@"Error parsing frame. error is: %@\n", frameError);
+				NSUInteger errorCode = [frameError code];
+				
+				if(errorCode == ID3_PARSERDOMAIN_EEMPTY || errorCode == ID3_PARSERDOMAIN_EFRAMEID){//Stop parsing - no useful information gathered
+					NSLog(@"Stopping parser due to unrecoverable frame parsing error.\n");
+					if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EFRAME 
+												underlyingError:frameError 
+												 recoveryObject:nil];
+					[framesArray release];
+					[data release];
+					return nil;
+				}
+				else{//Can continue parsing because location of next frame can be found.
+					ID3Frame *recoveredFrame = [frameError recoveryAttempter];
+					NSLog(@"Ignoring frame with frame ID: %@ and ID description: %@\n\n\n", [recoveredFrame	frameID], [recoveredFrame frameDescription]);
+					framePointer = framePointer + ID3_FRAMEHDR_LENGTH + recoveredFrame.size;
+					continue;
+				}
+			}
+			
+			framePointer = framePointer + ID3_FRAMEHDR_LENGTH + frame.size;
+			[framesArray addObject:frame];
+			
+		}
+		NSArray *descriptions = [ID3Parser descriptionsForFramesArray:framesArray];
+		return descriptions;
+	}
+	else{
+		if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EEMPTY
+										   underlyingError:NULL 
+											recoveryObject:NULL];
+		return nil;
+	}
+	
+	
+}
+
++ (NSError *)errorForCode:(NSInteger)errorCode underlyingError:(NSError *)otherError recoveryObject:(id)recoverObject
+{
+	NSString *description;
+	NSString *reason;
+	NSMutableDictionary *userInfo;
+	NSError *error = nil;
+	switch (errorCode) {
+		case ID3_PARSERDOMAIN_EEMPTY:
+		{
+			description = @"Error: Unable to parse. Can't parse empty data";
+			reason = @"Argument is nil or empty";
+			break;
+		}
+		case ID3_PARSERDOMAIN_ENOTFOUND:
+		{	
+			description = @"Error: Unable to parse tag. Start of ID3 tag not found.";
+			reason = @"Start of ID3 tag not found in data.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EVERSION:
+		{
+			description = @"Error: Can't parse ID3 tag of unsupported version.";
+			reason = @"ID3 version of tag currently not supported.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EFRAMEID:
+		{
+			description = @"Error: Unable to parse frame. Frame ID unknown";
+			reason = @"Frame ID unknown"; 
+			break;
+		}
+		case ID3_PARSERDOMAIN_EENCRYP:
+		{
+			description = @"Error: Unable to parse frame, parsing of encrypted frames is not supported.";
+			reason = @"Frame is encrypted";
+			break;
+		}
+		case ID3_PARSERDOMAIN_ECOMPR:
+		{
+			description = @"Error: Unable to parse frame, parsing of compressed data is not supported.";
+			reason = @"Frame is compressed.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EENCOD:
+		{
+			description = @"Error: unable to parse frame. Could not determine text encoding.";
+			reason = @"Text encoding undetermined.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EDELIM:
+		{
+			description = @"Error: unable to parse frame. Could not find delimiter character";
+			reason = @"Delimiter character not found.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EFRAME:
+		{
+			description = @"Unable to parse tag. There was frame parsing error. Check the underlying error.";
+			reason = @"Unable to parse frame.";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EFORMAT:
+		{
+			description = @"Unable to parse frame body. Frame body format is incorrect.";
+			reason = @"Unexpected frame body format";
+			break;
+		}
+		case ID3_PARSERDOMAIN_EUNKOWN:
+		{
+			description = @"Did not finish parsing frame. This frame is not currently supported. Check recovery object for frame header info.";
+			reason = @"Frame is not supported at this time.";
+			break;
+		}
+		default:
+			return nil;
+			break;
+	}
+	userInfo = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+				description, NSLocalizedDescriptionKey, reason, NSLocalizedFailureReasonErrorKey, nil];
+   
+	if(otherError != nil) [userInfo setObject:otherError forKey:NSUnderlyingErrorKey];
+	if(recoverObject != nil) [userInfo setObject:recoverObject forKey:NSRecoveryAttempterErrorKey];
+	error = [[NSError alloc] initWithDomain:ID3ParserDomain code:errorCode userInfo:userInfo];
+	return [error autorelease];
+}
+		 
+/*
+ WARNING!!!!: Function assumed to take a 4byte syncsafe integer in big endian notation. That's how size values appear in ID3 tags
+		Returns a uint32_t with the sync bits removed AND in LITTLE ENDIAN notation.
+		Why does it do two things at once? Because I'm lazy and this way its easier
+*/
++ (int)integerFromSyncsafeInteger:(int)syncsafeInt
+{
+	int tagSize = 0;
+	char* tagPtr = (char*)(&tagSize);
+	char* sizePtr = (char *)(&syncsafeInt);
+	int i = 0;
+	for(; i<3; i++){
+		*tagPtr = *tagPtr | (*(sizePtr + i));
+		tagSize = tagSize<<7;
+	}
+
+	*tagPtr = *tagPtr | *(sizePtr + i);
+	return tagSize;
+}
+
++ (NSArray *)descriptionsForFramesArray:(NSArray *)tagsArray 
+{
+	NSMutableArray *descriptions = [[NSMutableArray alloc] init];
+	for(id frame in tagsArray){
+		[descriptions addObject:[frame descriptionOfFrame]];
+	}
+	return [NSArray arrayWithArray:descriptions];
+}
+
+@end
