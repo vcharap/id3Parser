@@ -4,7 +4,6 @@
 
 #import <Cocoa/Cocoa.h>
 
-
 #ifndef ID3_H
 #define ID3_H
 
@@ -50,7 +49,18 @@ typedef enum ID3_VERSION ID3_VERSION;
 
 }
 
+/*
+ Function takes an NSData argument, returns an array representing the id3 tag. 
+	
+	The array is composed of NSDictionaries, one dictionary per supported frame found in tag.
+		Each dictionary contains they keys "frameID", "frameDescription", and a "value".
+ 
+ If there was a parsing error, function retrurns nil and creates an error object with a description of the error. 
+	The error argument is not required, but is recomended.
+*/
 + (NSArray *)parseTagWithData:(NSData *)rawData error:(NSError **)error;
+
+
 + (NSData *)unsyncData:(NSData *)data;
 + (NSError *)errorForCode:(NSInteger)errorCode underlyingError:(NSError *)otherError recoveryObject:(id)recoverObject;
 + (int)integerFromSyncsafeInteger:(int)syncsafeInt;

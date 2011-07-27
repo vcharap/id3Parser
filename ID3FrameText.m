@@ -21,6 +21,7 @@
  - frameIDString is the 3 or 4 letter frame ID
  - description is the string description of the frame ID
  - bytes is a pointer to beginning of frame header, can't be null.
+  - error argument can be ommited, but its not recommended
 
  */
 - (id)initWithID:(NSString *)frameIDString description:(NSString*)aDescription version:(ID3_VERSION)version andBytes:(const void *)bytes error:(NSError **)error
@@ -131,6 +132,10 @@
 	return self;
 }
 
+/*
+ Function returns a NSDictionary describing the frame
+	- all frames have keys "frameID" "frameDescription" and "value"
+*/
 - (NSDictionary*)descriptionOfFrame
 {
 	NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
@@ -148,5 +153,13 @@
 	[dictionary setValue:value forKey:@"value"];
 	[value release];
 	return [NSDictionary dictionaryWithDictionary:dictionary];
+}
+
+- (void)dealloc
+{
+	[textEncoding release];
+	[description release];
+	[textStrings release];
+	[super dealloc];
 }
 @end

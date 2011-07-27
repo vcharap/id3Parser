@@ -34,9 +34,8 @@ static NSSet *declaredFrames;
 }
 
 /*
- Function returns a frame for the given bytes.
+ Function returns a frame for the given bytes. Returns any of the possible sublcasses of ID3Frame, or nil on error. If nil, check NSError.
 	- bytes pointer must point to the first byte of a frame.
-	- return value is any of the possible sublcasses of ID3Frame, or nil on error. If nil, check NSError.
 */
 + (id)getFrameFromBytes:(const void*)bytes version:(ID3_VERSION)version error:(NSError **)error
 {
@@ -110,6 +109,7 @@ static NSSet *declaredFrames;
 			frame = [[ID3Frame alloc] initWithID:anID description:description version:version andBytes:bytes error:error];
 			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EUNKOWN underlyingError:nil recoveryObject:frame];
 			[frame release];
+			[anID release];
 			return nil;
 		}
 		default:
@@ -118,10 +118,12 @@ static NSSet *declaredFrames;
 			frame = [[ID3Frame alloc] initWithID:anID description:description version:version andBytes:bytes error:error];
 			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EUNKOWN underlyingError:nil recoveryObject:frame];
 			[frame release];
+			[anID release];
 			return nil;
 		}
 	}
 
+	[anID release];
 	return [frame autorelease];
 	
 }
@@ -266,4 +268,13 @@ static NSSet *declaredFrames;
 	return [NSDictionary dictionaryWithObjectsAndKeys:self.frameID, @"frameID", self.frameDescription, @"frameDescription", nil];
 }
 
+- (void)dealloc
+{
+	[frameID release];
+	[frameDescription release];
+	[flags release];
+	[dataForParsing release];
+	
+	[super dealloc];
+}
 @end

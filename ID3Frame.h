@@ -105,10 +105,6 @@
 
 + (id)getFrameFromBytes:(const void*)bytes version:(ID3_VERSION)version error:(NSError **)error; 
 
-/*
-+ (id)makeTextFrameWithIDString:(NSString *)frameIDString andBytes:(const void*)bytes;
-+ (id)makeURLFrameWithIDString:(NSString *)frameIDString andBytes:(const void*)bytes;
-*/
 
 - (id)initWithID:(NSString *)frameIDString description:(NSString *)description version:(ID3_VERSION)version andBytes:(const void*)bytes error:(NSError **)error;
 - (BOOL)setFlagPropertiesForData:(NSData *)data error:(NSError **)error;
