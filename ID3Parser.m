@@ -1,42 +1,10 @@
 //
 //  ID3Parser.m
-//  StreamTest
 //
-//  Created by mac on 7/6/11.
-//  Copyright 2011 __MyCompanyName__. All rights reserved.
-//
+
 #import "ID3Parser.h"
 #import "ID3Frame.h"
-
-//Boilerplate for ID3 Header
-#ifndef ID3_H
-#define ID3_H
-
-#define ID3_HEADER_VERSION_4 4
-
-#define ID3_HEADER_LENGTH 10
-#define ID3_HEADER_FLAGS_OFFSET 5
-#define ID3_HEADER_VERSION_OFFSET 3
-#define ID3_HEADER_SIZE_OFFSET 6
-
-#define ID3_HEADER_FLAG_UNSYNC 128
-#define ID3_HEADER_FLAG_EXTEND_HDR 64
-#define ID3_HEADER_FLAG_EXPERIMENTAL 32
-
-#endif
-
-//Boilerplate for ID3 FRAME header
-#ifndef ID3_FRAMEHDR
-#define ID3_FRAMEHDR
-
-#define ID3_FRAMEHDR_LENGTH 10
-#define ID3_FRAMEHDR_SIZE_OFFSET 4 //frame size does not include the 10 bytes of frame header
-#define ID3_FRAMEHDR_FLAGS_OFFSET 8
-#define ID3_FRAMEHDR_FLAGS_SIZE 2
-#define ID3_FRAMEHDR_ID_SIZE 4
-
-#endif
-
+//#import <CFByteOrder.h>
 
 
 static NSString * const ID3ParserDomain = @"ID3ParserDomain";
@@ -45,80 +13,133 @@ static NSString * const ID3ParserDomain = @"ID3ParserDomain";
 @interface ID3Parser ()
 
 + (NSArray *)descriptionsForFramesArray:(NSArray *)tagsArray;
-+ (NSError *)errorForCode:(NSInteger)errorCode underlyingError:(NSError *)otherError recoveryObject:(id)recoverObject;
-+ (int)integerFromSyncsafeInteger:(int)syncsafeInt;
-
 @end
-/*
- TODO: Make finding start of tag more robust
-		Adjust code to use NSError objects
-*/
+
+
 @implementation ID3Parser
+
 + (NSArray *)parseTagWithData:(NSData *)data error:(NSError **)error
 {
 	//NSDictionary *tagDictionary = nil;
 	NSUInteger length = [data length];
 	if(length){
-		[data retain]; //CONSIDER consequences of not retaining passed data
+		[data retain]; 		
 		
-		//NOTE: IF MANIPULATING BYTES, SHOULD PROBABLY COPY THEM!
-		
-		//get pointers to the beginning of frames, and to the end of the ID3 tag
-		/*
-		 TODO MAKE FINDING START OF TAG MORE ROBUST
-		*/
+		//find start of tag, end of tag
 		NSRange id3Header = [data rangeOfData:[NSData dataWithBytes:"ID3" length:3] options:0 range:NSMakeRange(0, length)]; 
 		if(id3Header.location == NSNotFound){
-			if(error != NULL) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_ENOTFOUND 
-											   underlyingError:nil 
+			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_ENOTFOUND 
+											   underlyingError:NULL 
 												recoveryObject:nil];
 			[data release];
 			return nil;
 		}
 		
-		char *id3HeaderBegin = (char*)[data bytes] + id3Header.location;
-		char majorVersion = *(id3HeaderBegin + ID3_HEADER_VERSION_OFFSET);
-		if(majorVersion != ID3_HEADER_VERSION_4){
-			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EVERSION 
-											   underlyingError:nil 
-												recoveryObject:nil];
+		const char *id3HeaderBegin = (const char*)[data bytes] + id3Header.location;
+		char version = *(id3HeaderBegin + ID3_HEADER_VERSION_OFFSET);
+		int tagSize;
+		ID3_VERSION majorVersion;
+		switch (version){
+			case 2:
+			{	
+				char num[4];
+				num[0] = 0;
+				const char* ptr = id3HeaderBegin + ID3_HEADER_SIZE_OFFSET;
+				memcpy(num + 1, ptr, 3);
+				tagSize = CFSwapInt32BigToHost(*(uint32_t*)num);
+				majorVersion = ID3_VERSION_2;
+				break;
+			}
+			case 3:
+			{
+				const int *sizePtr = (const int*)(id3HeaderBegin + ID3_HEADER_SIZE_OFFSET);
+				tagSize = CFSwapInt32BigToHost(*sizePtr);
+				majorVersion = ID3_VERSION_3;
+				break;
+			}
+			case 4:
+			{	
+				majorVersion = ID3_VERSION_4;
+				int syncInt = *(int *)(id3HeaderBegin + ID3_HEADER_SIZE_OFFSET);
+				tagSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
+				assert(tagSize <= 0xFFFFFFF);
+				break;
+			}
+			default:
+			{
+				if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EVERSION 
+										   underlyingError:NULL 
+											recoveryObject:nil];
+				[data release];
+				return nil;
+			}
+		}
+
+		NSLog(@"\n\nMAJOR VERSION IS: %d\n", majorVersion);
+		NSLog(@"Tag size is: %d\n", tagSize);
+		
+		
+		char flags = *(id3HeaderBegin + ID3_HEADER_FLAGS_OFFSET);
+		
+		if(majorVersion == ID3_VERSION_2 && (flags & V2_HEADER_FLAG_COMPRESSION)){
+			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_ECOMPR underlyingError:NULL recoveryObject:nil];
 			[data release];
 			return nil;
 		}
+		   
+		   
+		//check for unsynchronisation
+		const char* id3BodyBegin = id3HeaderBegin + ID3_HEADER_LENGTH;
 		
-		NSLog(@"Major version: %d", majorVersion);
+		if((char)V4_HEADER_FLAG_UNSYNC & flags){
+			if(majorVersion == ID3_VERSION_3 || majorVersion == ID3_VERSION_2){
+				NSLog(@"Tag has been unsynchronised\n");
+				NSData *tagBody = [ID3Parser unsyncData:[NSData dataWithBytes:id3HeaderBegin + ID3_HEADER_LENGTH length:tagSize]];
+				tagSize = [tagBody length];
+				id3BodyBegin = (const char*)[tagBody bytes];
+				[tagBody retain];
+				[data release];
+			}
+		}
 		
-		//convert sync safe integer into regular integer - ie get rid of the most significant bit in each byte (bits val is zero) 		
-		int syncInt = *(int *)(id3HeaderBegin + ID3_HEADER_SIZE_OFFSET);
-		int tagSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
-		assert(tagSize <= 0xFFFFFFF);
-		NSLog(@"Tag size is: %d", tagSize);
-		
-		//find extended header
-		char flags = *(id3HeaderBegin + ID3_HEADER_FLAGS_OFFSET); //flags is 6th byte from beginning of id3 header
+		   
+		//check for extended header
 		int extendedHeaderSize = 0;
-		if((char)ID3_HEADER_FLAG_EXTEND_HDR & flags){//extended header present in mask
-			NSLog(@"Extened header is present in mask\n");
-			syncInt = *(int *)(id3HeaderBegin + ID3_HEADER_LENGTH);
-			extendedHeaderSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
-			assert(extendedHeaderSize <=0xFFFFFFF);
+		if(majorVersion == ID3_VERSION_3 || majorVersion == ID3_VERSION_4){//extended header only in v2.3 and younger
+			
+			if((char)V4_HEADER_FLAG_EXTEND_HDR & flags){
+				NSLog(@"Extended header is present in mask\n");
+				int syncInt = *(int *)(id3BodyBegin);
+				if(majorVersion == ID3_VERSION_4){
+					extendedHeaderSize = [ID3Parser integerFromSyncsafeInteger:syncInt];
+					assert(extendedHeaderSize <=0xFFFFFFF);
+				}
+				else{
+					extendedHeaderSize = CFSwapInt32BigToHost(syncInt);
+				}
+			}
 		}
 		
-		char *framesBegin = (char*)(id3HeaderBegin + ID3_HEADER_LENGTH + extendedHeaderSize);
-		char *headerEnd = id3HeaderBegin + ID3_HEADER_LENGTH + tagSize;
 		
 		//Begin parsing frames
+		NSUInteger frameHeaderLength;
+		if(majorVersion == ID3_VERSION_2){ frameHeaderLength = V2_FRAMEHDR_LENGTH;}
+		else {frameHeaderLength = V4_FRAMEHDR_LENGTH;}
+
 		NSMutableArray *framesArray = [[NSMutableArray alloc] init];
-		char* framePointer = framesBegin;
+		const char* framePointer = (const char*)(id3BodyBegin + extendedHeaderSize);
+		const char *headerEnd = framePointer + tagSize;
+		
 		while(framePointer != headerEnd && *framePointer != 0){
+			
 			NSError *frameError = nil;
-			ID3Frame *frame = [ID3Frame getFrameFromBytes:framePointer error:&frameError];
-			if(frame == nil){//Error parsing frame
-				
+			ID3Frame *frame = [ID3Frame getFrameFromBytes:framePointer version:majorVersion error:&frameError];
+			
+			if(frame == nil){
 				NSLog(@"Error parsing frame. error is: %@\n", frameError);
 				NSUInteger errorCode = [frameError code];
 				
-				if(errorCode == ID3_PARSERDOMAIN_EEMPTY || errorCode == ID3_PARSERDOMAIN_EFRAMEID){//Stop parsing - no useful information gathered
+				if(errorCode == ID3_PARSERDOMAIN_EEMPTY || errorCode == ID3_PARSERDOMAIN_EFRAMEID){//Stop parsing: no useful information gathered
 					NSLog(@"Stopping parser due to unrecoverable frame parsing error.\n");
 					if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EFRAME 
 												underlyingError:frameError 
@@ -127,25 +148,24 @@ static NSString * const ID3ParserDomain = @"ID3ParserDomain";
 					[data release];
 					return nil;
 				}
-				else{//Can continue parsing because location of next frame can be found.
+				else{//Continue parsing: location of next frame can be found.
 					ID3Frame *recoveredFrame = [frameError recoveryAttempter];
-					NSLog(@"Ignoring frame with frame ID: %@ and ID description: %@\n\n\n", [recoveredFrame	frameID], [recoveredFrame frameDescription]);
-					framePointer = framePointer + ID3_FRAMEHDR_LENGTH + recoveredFrame.size;
+					NSLog(@"Ignoring frame with frame ID: %@ and ID description: %@\n\n\n", recoveredFrame.frameID, recoveredFrame.frameDescription);
+					framePointer = framePointer + frameHeaderLength + recoveredFrame.size;
 					continue;
 				}
 			}
 			
-			framePointer = framePointer + ID3_FRAMEHDR_LENGTH + frame.size;
-			[framesArray addObject:frame];
-			
+			framePointer = framePointer + frameHeaderLength + frame.size;
+			[framesArray addObject:frame];			
 		}
-		NSArray *descriptions = [ID3Parser descriptionsForFramesArray:framesArray];
-		return descriptions;
+	
+		return [ID3Parser descriptionsForFramesArray:framesArray];
 	}
 	else{
 		if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EEMPTY
 										   underlyingError:NULL 
-											recoveryObject:NULL];
+											recoveryObject:nil];
 		return nil;
 	}
 	
@@ -191,8 +211,8 @@ static NSString * const ID3ParserDomain = @"ID3ParserDomain";
 		}
 		case ID3_PARSERDOMAIN_ECOMPR:
 		{
-			description = @"Error: Unable to parse frame, parsing of compressed data is not supported.";
-			reason = @"Frame is compressed.";
+			description = @"Error: Unable to parse the tag, parsing of compressed data is not supported.";
+			reason = @"Data is compressed.";
 			break;
 		}
 		case ID3_PARSERDOMAIN_EENCOD:
@@ -267,4 +287,37 @@ static NSString * const ID3ParserDomain = @"ID3ParserDomain";
 	return [NSArray arrayWithArray:descriptions];
 }
 
++ (NSData *)unsyncData:(NSData *)data
+{	
+	NSUInteger bufferSize = [data length];
+	if(!bufferSize) return nil;
+	
+	char *buffer = malloc(bufferSize *sizeof(char));
+	const char *bytes = (const char*)[data bytes];
+	
+	NSUInteger index = 0;
+	BOOL possibleSync = NO;
+	const char* ptr = bytes;
+	const char* ptr_end = bytes + bufferSize;
+	char FF = 0xFF;
+	
+	for(; ptr != ptr_end; ptr++){
+		char value = *ptr;
+		if(possibleSync){
+			if(value) possibleSync = NO;
+			else{
+				possibleSync = NO;
+				continue;
+			}
+		}
+		
+		if(value == FF){
+			possibleSync = YES;
+		}
+		buffer[index++] = value;
+	}
+	
+	return [NSData dataWithBytes:buffer length:index];
+	
+}
 @end

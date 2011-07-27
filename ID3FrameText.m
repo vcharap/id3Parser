@@ -1,9 +1,5 @@
 //
 //  ID3FrameText.m
-//  StreamTest
-//
-//  Created by mac on 7/17/11.
-//  Copyright 2011 __MyCompanyName__. All rights reserved.
 //
 
 #import "ID3FrameText.h"
@@ -20,17 +16,31 @@
 @implementation ID3FrameText
 @synthesize textEncoding, textStrings, description;
 
-- (id)initWithIDString:(NSString *)frameIDString andBytes:(const void *)bytes error:(NSError **)error
+/*
+ Function initializes a text frame instance. Returns the initialized frame, or nil on error. If nil, check NSError.
+ - frameIDString is the 3 or 4 letter frame ID
+ - description is the string description of the frame ID
+ - bytes is a pointer to beginning of frame header, can't be null.
+
+ */
+- (id)initWithID:(NSString *)frameIDString description:(NSString*)aDescription version:(ID3_VERSION)version andBytes:(const void *)bytes error:(NSError **)error
 {
-	self = [super initWithIDString:frameIDString andBytes:bytes error:error];
+	self = [super initWithID:frameIDString description:aDescription version:version andBytes:bytes error:error];
 	if(self){
 		
 		self.textStrings = [[NSMutableArray alloc] init];
+		
 		//Get the text encoding of the tag.
-		char encoding = *(char*)[self.dataForParsing bytes];		
+		char* encodingPtr = (char*)[self.dataForParsing bytes];
+		if(encodingPtr == NULL){//No data to parse
+			if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EEMPTY underlyingError:nil recoveryObject:self];
+			[self release];
+			return nil;
+		}
+	
 		NSData *nullChar;
 		short nullVal = 0;
-		switch (encoding) {
+		switch (*encodingPtr) {
 			case ID3_TXTFRAME_ENCODING_ISO:
 			{
 				self.textEncoding = NSISOLatin1StringEncoding;
@@ -68,24 +78,20 @@
 		
 		//Parse the text
 		NSUInteger length = [self.dataForParsing length];
-		if(!length){//no frame body to parse
-			if(error){
-				*error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EEMPTY underlyingError:nil recoveryObject:self];
-			}
-			[self release];
-			return nil;
-		}
-		
-
 		NSUInteger index = 1;
 		NSRange dataRange;
 		NSString *frameString;
+		
+		NSString *userFrameID;
+		if(self.majorVersion == ID3_VERSION_2) userFrameID = @"TXX";
+		else userFrameID = @"TXXX";
+		
 		while(index < length){
 			NSRange nullDelimeter = [self.dataForParsing rangeOfData:nullChar options:0 range:NSMakeRange(index, length - index)];
 			
-			if([self.frameID isEqualToString:@"TXXX"] && self.description == nil){//TXXX frame
+			if([self.frameID isEqualToString:userFrameID] && self.description == nil){//TXX(X) frame
 				if(nullDelimeter.location == NSNotFound){
-					/*ERROR - FRAME FORMATTING IS WRONG  - expecting at least 1 null delimeter*/
+					/*FRAME FORMATTING IS WRONG  - expecting at least 1 null delimeter*/
 					if(error) *error = [ID3Parser errorForCode:ID3_PARSERDOMAIN_EFORMAT underlyingError:nil recoveryObject:self];
 					[self release];
 					return nil;
@@ -110,12 +116,14 @@
 				break;
 			}
 			
-			//put data between delimeters into a string.
+			//put data up to current delimeter into a string.
 			dataRange = NSMakeRange(index, nullDelimeter.location - index);
 			frameString = [[NSString alloc] initWithData:[self.dataForParsing subdataWithRange:dataRange] encoding:self.textEncoding];
 			[self.textStrings addObject:frameString];
 			[frameString release];
 			index = nullDelimeter.location + nullDelimeter.length;
+			
+			if(self.majorVersion == ID3_VERSION_2 || self.majorVersion == ID3_VERSION_3) break; //in v3 and older, data beyond null char is ignored
 
 		}
 		   

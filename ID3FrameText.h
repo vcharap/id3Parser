@@ -1,9 +1,5 @@
 //
 //  ID3FrameText.h
-//  StreamTest
-//
-//  Created by mac on 7/17/11.
-//  Copyright 2011 __MyCompanyName__. All rights reserved.
 //
 
 #import <Cocoa/Cocoa.h>
